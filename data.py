@@ -5,9 +5,9 @@ from torchvision.io import read_image
 from torchvision.transforms import Resize
 from torch.utils.data import Dataset, random_split, DataLoader
 from transformers import AutoImageProcessor, ResNetModel, AutoTokenizer
-import tiktoken
 
 
+label_to_ignore = -100
 image_size = (256, 256)
 # content_length = 1024
 # padding_idx = -100
@@ -16,35 +16,45 @@ image_processor = AutoImageProcessor.from_pretrained("microsoft/resnet-50")
 image_repr_model = ResNetModel.from_pretrained("microsoft/resnet-50")
 image_emb_size = 2048
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-padding_idx = tokenizer.pad_token_id
+# tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
+# padding_idx = tokenizer.pad_token_id
 eos_token_idx = tokenizer.eos_token_id
+resize_tf = Resize(image_size, antialias=None)
 
 # encode = lambda s: tokenizer(s, return_tensors="pt") # for HF's gpt
 # eos_token_id = enc.eos_token_id
 
 
 def transform_raw_image(image):
-    resize_tf = Resize(image_size, antialias=None)
+    # resize and embed image.
     image = resize_tf(image)
     processed_img = image_processor(image.transpose(0, 2).transpose(0,1), return_tensors="pt")
     outputs = image_repr_model(**processed_img)
     return outputs.pooler_output.squeeze().detach()
 
+def transform_raw_text(text):
+    return text + tokenizer.eos_token
 
-def collate_with_tokenize(data):
+def tokenize_and_collate(data):
+    """
+    Input:
+        list of tuples of (image_embedding, text)
+    Returns:
+        (image, tokenized_text, target_ids), where each is a tensor.
+    """
     texts = [d[1] for d in data]
     images = [d[0] for d in data]
-    # print("CHETAN DEBUG:  texts = ", texts)
-    # print("------------ ")
     tokenized_texts = tokenizer(
         texts, 
         return_tensors='pt', 
         padding=True,
         truncation=True,
-        max_length=sequence_length)
+        max_length=sequence_length,
+        add_special_tokens=False)
     images = torch.stack(images)
-    return (images, tokenized_texts)
+    target = torch.where(tokenized_texts["attention_mask"] != 0, tokenized_texts['input_ids'], label_to_ignore)
+    return (images, tokenized_texts, target)
 
     # try:
     #     ids = encode(text)
@@ -63,7 +73,7 @@ def collate_with_tokenize(data):
 
 
 class FlickrDataset(Dataset):
-    def __init__(self, annotations_file, img_dir, transform=None, target_transform=None):
+    def __init__(self, annotations_file, img_dir, transform=transform_raw_image, target_transform=transform_raw_text):
         self.img_labels = pd.read_csv(annotations_file, delimiter='|').sample(frac=1).reset_index(drop=True)
         self.img_dir = img_dir
         self.transform = transform

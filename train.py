@@ -4,8 +4,8 @@ from torch.optim.lr_scheduler import StepLR
 import argparse
 import torch.nn.functional as F
 from timeit import default_timer as timer
-from model import FakeModel, ImgToTextHfLlama2Decoder
-from data import FlickrDataset, transform_raw_image, collate_with_tokenize, FakeDataset
+from model import ImgToTextHfLlama2Decoder
+from data import FlickrDataset, tokenize_and_collate
 from torch.utils.data import random_split, DataLoader
 from collections import defaultdict
 import torch.autograd.profiler as profiler
@@ -49,12 +49,11 @@ wandb_tracker = trackers.Tracker(vars(args))
 
 dataset = FlickrDataset(
     annotations_file='../data/results.csv', 
-    img_dir='../data/flickr30k_images', 
-    transform=transform_raw_image)
-# dataset = FakeDataset()
+    img_dir='../data/flickr30k_images')
+
 train_ds, test_ds = random_split(dataset, [0.8, 0.2])
-train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=collate_with_tokenize)
-test_dataloader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=collate_with_tokenize)
+train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=tokenize_and_collate)
+test_dataloader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=tokenize_and_collate)
 
 def timeit(device):
     if True: #device == torch.device("mps"):
@@ -69,7 +68,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
     # st_r = st_all
     num_steps = 0
     losses = []
-    for batch_idx, (image_emb, token_ids) in enumerate(train_loader):
+    for batch_idx, (image_emb, token_ids, target_ids) in enumerate(train_loader):
         # print(f'Batch num = {batch_idx}')
         if num_steps >= args.max_train_steps:
             break
@@ -79,7 +78,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
         image_emb, token_ids = image_emb.to(device), token_ids.to(device)
         optimizer.zero_grad()
         # st_f = timeit(device)
-        logits, loss = model(image_emb, token_ids)
+        loss = model(image_emb, token_ids, target_ids, train=True)
         # print("Forward complete.")
         # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
         # et_f = timeit(device)
@@ -87,10 +86,10 @@ def train(args, model, device, train_loader, optimizer, epoch):
         # time_dict["forward"] += et_f - st_f
         # st_b = timeit(device)
         
-        if isinstance(model, torch.nn.DataParallel):
-            loss = model.module.train_val_step(logits, loss, token_ids, train=True)
-        else:
-            loss = model.train_val_step(logits, loss, token_ids, train=True)
+        # if isinstance(model, torch.nn.DataParallel):
+        #     loss = model.module.train_val_step(logits, loss, token_ids, train=True)
+        # else:
+        #     loss = model.train_val_step(logits, loss, token_ids, train=True)
         losses.append(loss.item())
         # print("Train step complete.")
             
@@ -136,15 +135,15 @@ def test(model, device, test_loader):
     losses = []
     num_steps = 0
     with torch.no_grad():
-        for image_emb, token_ids in test_loader:
+        for image_emb, token_ids, target_ids in test_loader:
             if num_steps >= args.max_eval_steps:
                 break
             image_emb, token_ids = image_emb.to(device), token_ids.to(device)
-            logits, loss = model(image_emb, token_ids)
-            if isinstance(model, torch.nn.DataParallel):
-                loss = model.module.train_val_step(logits, loss, token_ids, train=False)
-            else:
-                loss = model.train_val_step(logits, loss, token_ids, train=False)
+            loss = model(image_emb, token_ids, target_ids, train=False)
+            # if isinstance(model, torch.nn.DataParallel):
+            #     loss = model.module.train_val_step(logits, loss, token_ids, train=False)
+            # else:
+            #     loss = model.train_val_step(logits, loss, token_ids, train=False)
             # test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
             # pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
             # correct += pred.eq(target.view_as(pred)).sum().item()

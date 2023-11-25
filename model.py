@@ -98,19 +98,18 @@ def timeit(device):
 #         return loss
             
 class ImgToTextHfLlama2Decoder(torch.nn.Module):
-    def __init__(self, image_n_emb=image_emb_size, decoder_n_emb=sequence_length, padding_idx=padding_idx, eos_token_idx=eos_token_idx):
+    def __init__(self, image_n_emb=image_emb_size, decoder_n_emb=sequence_length):
         # TODO: earlier padding_idx was -100. Handle that in label calculation.
         super(ImgToTextHfLlama2Decoder, self).__init__()
         self.decoder = LlamaForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf")
         self.decoder.resize_token_embeddings(self.decoder.config.vocab_size + 1) # for newly added padding token
         self.decoder_emb_table = self.decoder.model.embed_tokens
         self.img2token_emb_projector = torch.nn.Linear(image_n_emb, decoder_n_emb)
-        self.padding_idx = padding_idx
+        # self.padding_idx = padding_idx
         # self.eos_token_idx = eos_token_idx
         
         lora_config = self.get_lora_config()
         self.decoder_lora = get_peft_model(self.decoder, lora_config)
-        
         
     
     def get_lora_config(self):
@@ -118,7 +117,7 @@ class ImgToTextHfLlama2Decoder(torch.nn.Module):
         # TODO: which layers are being replaced? And how to specify all SA and FNN layers?
         return lora_config
 
-    def forward(self, image_emb, token_ids):
+    def forward(self, image_emb, token_ids, target_ids, train=True):
         image_emb = self.img2token_emb_projector(image_emb).unsqueeze(1)
 
         # NOT NEEDED? -- Padding token isn't in embedding layer, so replace with EOS. This will be masked out via attention mask -- TO VERIFY!
@@ -130,38 +129,50 @@ class ImgToTextHfLlama2Decoder(torch.nn.Module):
         # print("In forward() --  input_ids.shape = ", token_ids['input_ids'].shape)
         
 
-        concat_input_embs = torch.cat([image_emb, token_input_embeds], dim=1)
+        inputs_embeds = torch.cat([image_emb, token_input_embeds], dim=1)
         
         # Update attention mask with 1s in first column.
         attention_mask = torch.cat([torch.ones((token_ids['input_ids'].shape[0], 1), device='cuda'), token_ids['attention_mask']], dim=1)
         # print("Shape of attention_mask (post-surgery) = ", attention_mask.shape)
-        out =  self.decoder_lora(inputs_embeds=concat_input_embs, attention_mask=attention_mask)
-        logits, loss = out[0], None
-        return (logits, loss)
-
-    def train_val_step(self, logits, loss, token_ids, train=True):
-        if train:
-            self.decoder_lora.train()
-        else:
-            self.decoder_lora.eval()
-    
-        # print("-----------------")
-        # print("In train_val_step() --  input_ids = ", token_ids['input_ids'])
-        # print("In train_val_step() --  input_ids.shape = ", token_ids['input_ids'].shape)
+        out =  self.decoder_lora(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=target_ids)
+        print("inputs_embeds =", inputs_embeds.shape)
+        print("input_ids = ", token_ids['input_ids'])
+        print("attention_mask =", attention_mask)
+        print("target_ids =", target_ids)        
+        print("Printing out -->")
+        print(out[0].shape)
+        print(out[1].shape)
+        print(out)
+        print("================================")
         
-        # input() 
-        
-        # print("CHETAN DEGUB. BEFORE logits = ", logits.shape)
-        logits = logits[:, :-1, :].transpose(1, 2)
-        # print("CHETAN DEGUB. logits = ", logits.shape, logits)
-        target = torch.where(token_ids['input_ids'] != self.padding_idx, token_ids['input_ids'], -100 * torch.ones_like(token_ids['input_ids']))
-        ce_loss = torch.nn.CrossEntropyLoss()
-        loss = ce_loss(input=logits, target=target)
-            
+        logits, loss = out[0].transpose(1, 2), out[1]
         if train:
             loss.backward()
-
         return loss
+
+    # def train_val_step(self, logits, loss, token_ids, train=True):
+    #     if train:
+    #         self.decoder_lora.train()
+    #     else:
+    #         self.decoder_lora.eval()
+    
+    #     # print("-----------------")
+    #     # print("In train_val_step() --  input_ids = ", token_ids['input_ids'])
+    #     # print("In train_val_step() --  input_ids.shape = ", token_ids['input_ids'].shape)
+        
+    #     # input() 
+        
+    #     # print("CHETAN DEGUB. BEFORE logits = ", logits.shape)
+    #     logits = logits[:, :-1, :].transpose(1, 2)
+    #     # print("CHETAN DEGUB. logits = ", logits.shape, logits)
+    #     target = torch.where(token_ids['input_ids'] != self.padding_idx, token_ids['input_ids'], -100 * torch.ones_like(token_ids['input_ids']))
+    #     ce_loss = torch.nn.CrossEntropyLoss()
+    #     loss = ce_loss(input=logits, target=target)
+            
+    #     if train:
+    #         loss.backward()
+
+    #     return loss
             
 
 
