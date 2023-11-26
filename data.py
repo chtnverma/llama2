@@ -3,28 +3,20 @@ import os
 import pandas as pd
 from torchvision.io import read_image
 from torchvision.transforms import Resize
-from torch.utils.data import Dataset, random_split, DataLoader
+from torch.utils.data import Dataset
 from transformers import AutoImageProcessor, ResNetModel, AutoTokenizer
 
 
 label_to_ignore = -100
 image_size = (256, 256)
-# content_length = 1024
-# padding_idx = -100
 sequence_length = 4096
 image_processor = AutoImageProcessor.from_pretrained("microsoft/resnet-50")
 image_repr_model = ResNetModel.from_pretrained("microsoft/resnet-50")
 image_emb_size = 2048
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-# tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
-# padding_idx = tokenizer.pad_token_id
-# eos_token_idx = tokenizer.eos_token_id
 resize_tf = Resize(image_size, antialias=None)
-
-# encode = lambda s: tokenizer(s, return_tensors="pt") # for HF's gpt
-# eos_token_id = enc.eos_token_id
-
+eos_token_id = tokenizer.eos_token_id
 
 def transform_raw_image(image):
     # resize and embed image.
@@ -38,10 +30,8 @@ def transform_raw_text(text):
 
 def tokenize_and_collate(data):
     """
-    Input:
-        list of tuples of (image_embedding, text)
-    Returns:
-        (image, tokenized_text, target_ids), where each is a tensor.
+    Input: list of tuples of (image_embedding, text, img_path)
+    Returns: (image, tokenized_text, target_ids), where each is a tensor.
     """
     texts = [d[1] for d in data]
     images = [d[0] for d in data]
@@ -55,22 +45,6 @@ def tokenize_and_collate(data):
     images = torch.stack(images)
     target = torch.where(tokenized_texts["attention_mask"] != 0, tokenized_texts['input_ids'], label_to_ignore)
     return (images, tokenized_texts, target)
-
-    # try:
-    #     ids = encode(text)
-    # except ValueError as err:
-    #     print(f"Catching an error at ids = encode(text). The text ={text}. Error ={err}.")
-    #     print(f'Other details: type={type(text)}. len={len(text)}')
-    #     raise Exception("Boo!")        
-    
-    # # return torch.Tensor([])
-    # # unpadded = (torch.tensor(ids['input_ids'], dtype=torch.long)[None, ...])
-    # unpadded = ids['input_ids'].long()[None, ...]
-    # unpadded = unpadded[0, :content_length-1]
-    # padding = torch.full((1, content_length - 1 - unpadded.shape[1]), padding_idx)
-    # return torch.cat([unpadded, padding], dim=1).squeeze()
-
-
 
 class FlickrDataset(Dataset):
     def __init__(self, annotations_file, img_dir, transform=transform_raw_image, target_transform=transform_raw_text):
@@ -90,8 +64,7 @@ class FlickrDataset(Dataset):
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(str(label))
-        return image, label
-
+        return image, img_path, label
 
 
 class FakeDataset(Dataset):
@@ -100,10 +73,6 @@ class FakeDataset(Dataset):
     def __len__(self):
         return 1000
     def __getitem__(self, idx):
-        # image = torch.rand([2048])
-        # label = torch.randint(10683, [1023])
-        
-        # Below data is to be used with FakeModel:
         image = torch.rand(8192, 2048)
         label = torch.rand(2048, 8192)
         return image, label
