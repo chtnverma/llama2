@@ -56,8 +56,7 @@ train_dataloader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True
 test_dataloader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=tokenize_and_collate)
 
 def timeit(device):
-    if True: #device == torch.device("mps"):
-        torch.cuda.synchronize()
+    torch.cuda.synchronize()
     return timer()
 
 
@@ -68,30 +67,21 @@ def train(args, model, device, train_loader, optimizer, epoch):
     # st_r = st_all
     num_steps = 0
     losses = []
+    print('\nTraining')
     for batch_idx, (image_emb, token_ids, target_ids) in enumerate(train_loader):
-        # print(f'Batch num = {batch_idx}')
+        print(f'Batch num = {batch_idx}', end="\r", flush=True)
         if num_steps >= args.max_train_steps:
             break
         # time_dict["next_example"] += timeit(device) - st_r
-        # print(f"image_emb = {image_emb}")
-        # print(f"token_ids = {token_ids}")
-        image_emb, token_ids = image_emb.to(device), token_ids.to(device)
+        image_emb, token_ids, target_ids = image_emb.to(device), token_ids.to(device), target_ids.to(device)
         optimizer.zero_grad()
         # st_f = timeit(device)
         loss = model(image_emb, token_ids, target_ids, train=True)
-        # print("Forward complete.")
-        # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
         # et_f = timeit(device)
-        # print(f"[{__file__.split('/')[-1]}] At overall level: time for forward() = {et_f - st_f}")
         # time_dict["forward"] += et_f - st_f
         # st_b = timeit(device)
         
-        # if isinstance(model, torch.nn.DataParallel):
-        #     loss = model.module.train_val_step(logits, loss, token_ids, train=True)
-        # else:
-        #     loss = model.train_val_step(logits, loss, token_ids, train=True)
         losses.append(loss.item())
-        # print("Train step complete.")
             
             
         # et_b = timeit(device)
@@ -99,7 +89,6 @@ def train(args, model, device, train_loader, optimizer, epoch):
         # time_dict["backward"] += et_b - st_b
 
         # st_o = timeit(device)
-        # accelerator.backward(loss)
         optimizer.step()
         # time_dict["optimizer"] += timeit(device) - st_o
 
@@ -110,7 +99,7 @@ def train(args, model, device, train_loader, optimizer, epoch):
                 epoch, batch_idx * len(image_emb), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), sum(losses) / len(losses) ))
 
-            wandb_tracker.log({'train_loss': sum(losses) / len(losses)}, step=(batch_idx+1) + len(train_loader.dataset) * epoch)
+            wandb_tracker.log({'train_loss': sum(losses) / len(losses)}, step=(batch_idx+1) * args.batch_size + len(train_loader.dataset) * epoch)
 
             time_dict["all"] = timeit(device) - st_all
             st_all = timeit(device)
@@ -131,22 +120,15 @@ def test(model, device, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
-    print('Testing')
+    print('\nTesting')
     losses = []
     num_steps = 0
     with torch.no_grad():
         for image_emb, token_ids, target_ids in test_loader:
             if num_steps >= args.max_eval_steps:
                 break
-            image_emb, token_ids = image_emb.to(device), token_ids.to(device)
+            image_emb, token_ids, target_ids = image_emb.to(device), token_ids.to(device), target_ids.to(device)
             loss = model(image_emb, token_ids, target_ids, train=False)
-            # if isinstance(model, torch.nn.DataParallel):
-            #     loss = model.module.train_val_step(logits, loss, token_ids, train=False)
-            # else:
-            #     loss = model.train_val_step(logits, loss, token_ids, train=False)
-            # test_loss += F.nll_loss(output, target, reduction='sum').item()  # sum up batch loss
-            # pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-            # correct += pred.eq(target.view_as(pred)).sum().item()
             losses.append(loss)
             num_steps += 1
 
@@ -162,26 +144,18 @@ elif use_mps:
     print("## Using mps")
 else:
     device = torch.device("cpu")
-# device = torch.device("cpu")
-
-
-# accelerator = Accelerator()
-# device = accelerator.device
 
 print('Using device:', device)
 model = ImgToTextHfLlama2Decoder().to(device)
-# model= torch.nn.DataParallel(model)
-
-# model = FakeModel(2048, 768).to(device)
 
 optimizer = optim.AdamW(model.parameters(), lr=3e-5)
 scheduler = StepLR(optimizer, step_size=1)
-
-# model, optimizer, train_dataloader, test_dataloader = accelerator.prepare(model, optimizer, train_dataloader, test_dataloader)
 
 for epoch in range(1, 10):
     print(f"Starting epoch # {epoch}")
     train(args, model, device, train_dataloader, optimizer, epoch)
     test(model, device, test_dataloader)
     scheduler.step()
-    torch.save(model, f'models/model_{epoch}.pt')
+    # torch.save(model, f'models/model_{epoch}.pt')
+
+torch.save(model, f'models/model_{epoch}.pt')

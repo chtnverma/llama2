@@ -1,7 +1,7 @@
 
 import torch
 from gpt import GPTConfig, GPT
-from data import padding_idx, eos_token_idx, image_emb_size, sequence_length
+from data import image_emb_size, sequence_length, label_to_ignore
 from transformers import GPT2LMHeadModel, LlamaForCausalLM
 from peft import LoraConfig, get_peft_model
 
@@ -132,22 +132,39 @@ class ImgToTextHfLlama2Decoder(torch.nn.Module):
         inputs_embeds = torch.cat([image_emb, token_input_embeds], dim=1)
         
         # Update attention mask with 1s in first column.
+        # Add -100 before target IDs - note that HF's LLama2 shifts labels right and ignores first element. Similarly it ignores last logits,
         attention_mask = torch.cat([torch.ones((token_ids['input_ids'].shape[0], 1), device='cuda'), token_ids['attention_mask']], dim=1)
-        # print("Shape of attention_mask (post-surgery) = ", attention_mask.shape)
-        out =  self.decoder_lora(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=target_ids)
-        print("inputs_embeds =", inputs_embeds.shape)
-        print("input_ids = ", token_ids['input_ids'])
-        print("attention_mask =", attention_mask)
-        print("target_ids =", target_ids)        
-        print("Printing out -->")
-        print(out[0].shape)
-        print(out[1].shape)
-        print(out)
-        print("================================")
+        target_ids = torch.cat([label_to_ignore * torch.ones((token_ids['input_ids'].shape[0], 1), device='cuda', dtype=torch.int), target_ids], dim=1)
         
-        logits, loss = out[0].transpose(1, 2), out[1]
+        # print("------ BEFORE -------")
+        # print("inputs_embeds =", inputs_embeds.shape)
+        # print("input_ids = ", token_ids['input_ids'])
+        # print("input_ids.shape = ", token_ids['input_ids'].shape)
+        # print("attention_mask =", attention_mask)
+        # print("attention_mask.shape =", attention_mask.shape)
+        # print("target_ids =", target_ids)        
+        # print("target_ids.shape =", target_ids.shape)        
+        # print("**************")
+        
+        out =  self.decoder_lora(inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=target_ids, return_dict=True)
+        # print("Printing out -->")
+        # print(list(out.keys()))
+        # print(len(out))
+        # for k, v in out.items():
+        #     print(k)
+        #     print(v)
+        #     print("-----------")
+        # print(out[0].shape)
+        # print(out[1].shape)
+        # print(out[2])
+        # print(out)
+        # print("================================")
+        
+        loss = out["loss"]
         if train:
             loss.backward()
+        
+        loss = loss.detach()
         return loss
 
     # def train_val_step(self, logits, loss, token_ids, train=True):

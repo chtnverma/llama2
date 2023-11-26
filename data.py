@@ -19,7 +19,7 @@ tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
 # tokenizer.add_special_tokens({'pad_token': '[PAD]'})
 tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
 # padding_idx = tokenizer.pad_token_id
-eos_token_idx = tokenizer.eos_token_id
+# eos_token_idx = tokenizer.eos_token_id
 resize_tf = Resize(image_size, antialias=None)
 
 # encode = lambda s: tokenizer(s, return_tensors="pt") # for HF's gpt
@@ -89,7 +89,7 @@ class FlickrDataset(Dataset):
         if self.transform:
             image = self.transform(image)
         if self.target_transform:
-            label = self.target_transform(label)
+            label = self.target_transform(str(label))
         return image, label
 
 
